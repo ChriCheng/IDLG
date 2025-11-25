@@ -144,13 +144,14 @@ def main():
     else:
         exit("unknown dataset")
 
+    photo = []
     for idx_net in range(num_exp):
         net = LeNet(channel=channel, hideen=hidden, num_classes=num_classes)
         net.apply(weights_init)
 
         print("running %d|%d experiment" % (idx_net + 1, num_exp))
         net = net.to(device)
-        photo = []
+
         for method in ["DLG", "iDLG"]:
             print("%s, Try to generate %d images" % (method, num_dummy))
             if dataset == "test":
