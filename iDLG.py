@@ -7,6 +7,7 @@ import torch.nn as nn
 from torch.utils.data import Dataset
 from torchvision import datasets, transforms
 import pickle
+from pathlib import Path
 import PIL.Image as Image
 
 
@@ -82,20 +83,22 @@ def lfw_dataset(lfw_path, shape_img):
 
 
 def main():
-    dataset = "cifar100"
+    dataset = "test"
     root_path = "."
     # data_path = os.path.join(root_path, '../data').replace('\\', '/')
-    data_path = os.path.expanduser("~/.torch")
-    save_path = os.path.join(root_path, "results/iDLG_%s" % dataset).replace("\\", "/")
+    data_path = os.path.expanduser("photo")  # test photo folder
+    # save_path = os.path.join(root_path, "results/iDLG_%s" % dataset).replace("\\", "/")
+    save_path = os.path.join("photo/resutls")
 
     lr = 1.0
     num_dummy = 1
     Iteration = 300
-    num_exp = 1000
+    num_exp = 2  # number of experiments
 
     use_cuda = torch.cuda.is_available()
     device = "cuda" if use_cuda else "cpu"
 
+    # diff
     tt = transforms.Compose([transforms.ToTensor()])
     tp = transforms.Compose([transforms.ToPILImage()])
 
@@ -121,7 +124,14 @@ def main():
         num_classes = 100
         channel = 3
         hidden = 768
-        dst = datasets.CIFAR100(data_path, download=False)
+        dst = datasets.CIFAR100("~/.torch", download=False)
+
+    elif dataset == "test":
+        shape_img = (32, 32)
+        num_classes = 100
+        channel = 3
+        hidden = 768
+        dst = datasets.CIFAR100("~/.torch", download=False)
 
     elif dataset == "lfw":
         shape_img = (32, 32)
@@ -134,43 +144,61 @@ def main():
     else:
         exit("unknown dataset")
 
-    """ train DLG and iDLG """
     for idx_net in range(num_exp):
         net = LeNet(channel=channel, hideen=hidden, num_classes=num_classes)
         net.apply(weights_init)
 
-        print("running %d|%d experiment" % (idx_net, num_exp))
+        print("running %d|%d experiment" % (idx_net + 1, num_exp))
         net = net.to(device)
-        idx_shuffle = np.random.permutation(len(dst))
-
+        photo = []
         for method in ["DLG", "iDLG"]:
             print("%s, Try to generate %d images" % (method, num_dummy))
+            if dataset == "test":
+                if len(photo) == 0:
+                    photo = list(Path(data_path).rglob("*.png"))
+                criterion = nn.CrossEntropyLoss().to(device)
+                photo_list = []
+                for pic in range(num_dummy):
+                    # ----- 读取 test 文件夹里的图片 -----
+                    test_img_path = photo[pic]
+                    # photo.pop(pic)
 
-            criterion = nn.CrossEntropyLoss().to(device)
-            imidx_list = []
-
-            for imidx in range(num_dummy):
-                idx = idx_shuffle[imidx]
-                imidx_list.append(idx)
-                tmp_datum = tt(dst[idx][0]).float().to(device)
-                tmp_datum = tmp_datum.view(1, *tmp_datum.size())
-                tmp_label = torch.Tensor([dst[idx][1]]).long().to(device)
-                tmp_label = tmp_label.view(
-                    1,
-                )
-                if imidx == 0:
+                    photo_list.append(test_img_path)
+                    img = Image.open(test_img_path).convert("RGB")
+                    tmp_datum = tt(img).float().to(device)
+                    tmp_datum = tmp_datum.view(1, *tmp_datum.size())
+                    fixed_label = torch.tensor([dst[25][1]]).long().to(device)
+                    tmp_label = fixed_label.view(
+                        1,
+                    )
                     gt_data = tmp_datum
                     gt_label = tmp_label
-                else:
-                    gt_data = torch.cat((gt_data, tmp_datum), dim=0)
-                    gt_label = torch.cat((gt_label, tmp_label), dim=0)
+            else:
+                idx_shuffle = np.random.permutation(len(dst))
+
+                criterion = nn.CrossEntropyLoss().to(device)
+                imidx_list = []
+                for imidx in range(num_dummy):  # batch extention ? Future research
+                    idx = idx_shuffle[imidx]
+                    imidx_list.append(idx)
+                    tmp_datum = tt(dst[idx][0]).float().to(device)
+                    tmp_datum = tmp_datum.view(1, *tmp_datum.size())
+                    tmp_label = torch.Tensor([dst[idx][1]]).long().to(device)
+                    tmp_label = tmp_label.view(
+                        1,
+                    )
+                    if imidx == 0:
+                        gt_data = tmp_datum
+                        gt_label = tmp_label
+                    else:
+                        gt_data = torch.cat((gt_data, tmp_datum), dim=0)
+                        gt_label = torch.cat((gt_label, tmp_label), dim=0)
 
             # compute original gradient
             out = net(gt_data)
             y = criterion(out, gt_label)
             dy_dx = torch.autograd.grad(y, net.parameters())
             original_dy_dx = list((_.detach().clone() for _ in dy_dx))
-
             # generate dummy data and label
             dummy_data = torch.randn(gt_data.size()).to(device).requires_grad_(True)
             dummy_label = (
@@ -178,7 +206,6 @@ def main():
                 .to(device)
                 .requires_grad_(True)
             )
-
             if method == "DLG":
                 optimizer = torch.optim.LBFGS([dummy_data, dummy_label], lr=lr)
             elif method == "iDLG":
@@ -195,13 +222,11 @@ def main():
                     .reshape((1,))
                     .requires_grad_(False)
                 )
-
             history = []
             history_iters = []
             losses = []
             mses = []
             train_iters = []
-
             print("lr =", lr)
             for iters in range(Iteration):
 
@@ -219,11 +244,9 @@ def main():
                         # dummy_loss = criterion(pred, gt_label)
                     elif method == "iDLG":
                         dummy_loss = criterion(pred, label_pred)
-
                     dummy_dy_dx = torch.autograd.grad(
                         dummy_loss, net.parameters(), create_graph=True
                     )
-
                     grad_diff = 0
                     for gx, gy in zip(dummy_dy_dx, original_dy_dx):
                         grad_diff += ((gx - gy) ** 2).sum()
@@ -235,7 +258,6 @@ def main():
                 train_iters.append(iters)
                 losses.append(current_loss)
                 mses.append(torch.mean((dummy_data - gt_data) ** 2).item())
-
                 if iters % int(Iteration / 30) == 0:
                     current_time = str(
                         time.strftime("[%Y-%m-%d %H:%M:%S]", time.localtime())
@@ -249,7 +271,6 @@ def main():
                         [tp(dummy_data[imidx].cpu()) for imidx in range(num_dummy)]
                     )
                     history_iters.append(iters)
-
                     for imidx in range(num_dummy):
                         plt.figure(figsize=(12, 8))
                         plt.subplot(3, 10, 1)
@@ -259,22 +280,32 @@ def main():
                             plt.imshow(history[i][imidx])
                             plt.title("iter=%d" % (history_iters[i]))
                             plt.axis("off")
-                        if method == "DLG":
-                            plt.savefig(
-                                "%s/DLG_on_%s_%05d.png"
-                                % (save_path, imidx_list, imidx_list[imidx])
-                            )
-                            plt.close()
-                        elif method == "iDLG":
-                            plt.savefig(
-                                "%s/iDLG_on_%s_%05d.png"
-                                % (save_path, imidx_list, imidx_list[imidx])
-                            )
+                        if dataset == "test":
+                            fname = Path(test_img_path).name  # only filename
+                            if method == "DLG":
+                                save_name = f"DLG_on_{fname}"
+                            else:
+                                save_name = f"iDLG_on_{fname}"
+
+                            save_path_full = os.path.join(save_path, save_name)
+                            plt.savefig(save_path_full)
                             plt.close()
 
+                        else:
+                            if method == "DLG":
+                                plt.savefig(
+                                    "%s/DLG_on_%s_%05d.png"
+                                    % (save_path, imidx_list, imidx_list[imidx])
+                                )
+                                plt.close()
+                            elif method == "iDLG":
+                                plt.savefig(
+                                    "%s/iDLG_on_%s_%05d.png"
+                                    % (save_path, imidx_list, imidx_list[imidx])
+                                )
+                                plt.close()
                     if current_loss < 0.000001:  # converge
                         break
-
             if method == "DLG":
                 loss_DLG = losses
                 label_DLG = torch.argmax(dummy_label, dim=-1).detach().item()
@@ -283,20 +314,23 @@ def main():
                 loss_iDLG = losses
                 label_iDLG = label_pred.item()
                 mse_iDLG = mses
-
-        print("imidx_list:", imidx_list)
-        print("loss_DLG:", loss_DLG[-1], "loss_iDLG:", loss_iDLG[-1])
-        print("mse_DLG:", mse_DLG[-1], "mse_iDLG:", mse_iDLG[-1])
-        print(
-            "gt_label:",
-            gt_label.detach().cpu().data.numpy(),
-            "lab_DLG:",
-            label_DLG,
-            "lab_iDLG:",
-            label_iDLG,
-        )
-
-        print("----------------------\n\n")
+                if dataset == "test":
+                    print("photo_list:", photo_list)
+                else:
+                    print("imidx_list:", imidx_list)
+                print("loss_DLG:", loss_DLG[-1], "loss_iDLG:", loss_iDLG[-1])
+                print("mse_DLG:", mse_DLG[-1], "mse_iDLG:", mse_iDLG[-1])
+                print(
+                    "gt_label:",
+                    gt_label.detach().cpu().data.numpy(),
+                    "lab_DLG:",
+                    label_DLG,
+                    "lab_iDLG:",
+                    label_iDLG,
+                )
+                print("----------------------\n\n")
+        if len(photo) > 0:
+            photo.pop(0)
 
 
 if __name__ == "__main__":
