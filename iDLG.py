@@ -208,12 +208,15 @@ def main():
                 .requires_grad_(True)
             )
             if method == "DLG":
-                optimizer = torch.optim.LBFGS([dummy_data, dummy_label], lr=lr)
+                optimizer = torch.optim.LBFGS(
+                    [dummy_data, dummy_label], line_search_fn="strong_wolfe", lr=lr
+                )
             elif method == "iDLG":
                 optimizer = torch.optim.LBFGS(
                     [
                         dummy_data,
                     ],
+                    line_search_fn="strong_wolfe",  # Attempt to solve gradient explosion
                     lr=lr,
                 )
                 # predict the ground-truth label
@@ -329,6 +332,26 @@ def main():
                     "lab_iDLG:",
                     label_iDLG,
                 )
+                # logging results
+                log_dir = Path("photo/logs")
+                log_dir.mkdir(parents=True, exist_ok=True)
+                log_path = log_dir / "result.log"
+                with log_path.open("a", encoding="utf-8") as f:
+                    if dataset == "test":
+                        f.write(
+                            f"==========================photo_list: {photo_list},==========================\n"
+                            f"loss_DLG: {loss_DLG[-1]}, loss_iDLG: {loss_iDLG[-1]} \n"
+                            f" mse_DLG: {mse_DLG[-1]}, mse_iDLG: {mse_iDLG[-1]}\n "
+                            f" gt_label: {gt_label.detach().cpu().data.numpy()}, lab_DLG: {label_DLG}, lab_iDLG: {label_iDLG}\n"
+                        )
+                    else:
+                        f.write(
+                            f"==========================imidx_list: {imidx_list},==========================\n"
+                            f"loss_DLG: {loss_DLG[-1]}, loss_iDLG: {loss_iDLG[-1]} \n"
+                            f" mse_DLG: {mse_DLG[-1]}, mse_iDLG: {mse_iDLG[-1]}\n "
+                            f" gt_label: {gt_label.detach().cpu().data.numpy()}, lab_DLG: {label_DLG}, lab_iDLG: {label_iDLG}\n"
+                        )
+
                 print("----------------------\n\n")
         if len(photo) > 0:
             photo.pop(0)
